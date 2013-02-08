@@ -16,10 +16,12 @@
 # along with YouCompleteMe.  If not, see <http://www.gnu.org/licenses/>.
 
 import vim
+from threading import Thread, Event
 from completers.completer import Completer
-from vimsupport import PostVimMessage, CurrentLineAndColumn
+from vimsupport import CurrentLineAndColumn
 
 import sys
+import re
 from os.path import join, abspath, dirname
 
 # We need to add the jedi package to sys.path, but it's important that we clean
@@ -29,40 +31,86 @@ sys.path.insert(0, join(abspath(dirname(__file__)), 'jedi'))
 from jedi import Script
 sys.path.pop(0)
 
-class JediCompleter( Completer ):
+
+class JediCompleter(Completer):
     """
-    A Completer that uses the Jedi completion engine 
+    A Completer that uses the Jedi completion engine.
     https://jedi.readthedocs.org/en/latest/
     """
 
-    def __init__( self ):
-        self.candidates = None
+    def __init__(self):
+        self._query_ready = Event()
+        self._candidates_ready = Event()
+        self._query = None
+        self._candidates = None
+        self._exit = False
+        self._completion_thread = Thread(target=self.SetCandidates)
+        self._completion_thread.start()
 
-    def SupportedFiletypes( self ):
+    def SupportedFiletypes(self):
         """ Just python """
         return ['python']
 
     def ShouldUseNow(self, start_column):
-        """ Only use jedi-completion after a . """
+        """
+        Use Jedi if we are completing an identifier immediately after a dot.
+        """
         line = vim.current.line
-        return len(line) >= start_column and line[start_column - 1] == '.'
+        before, dot, after = line.rpartition('.')
+        if dot and len(before) < start_column and re.search('^\\w*$', after):
+            return True
 
-    def CandidatesFromStoredRequest( self ):
-        return self.candidates
-    
+        return False
+
     def OnFileReadyToParse(self):
         pass
 
+    def CandidatesForQueryAsync(self, query):
+        self._query = query
+        self._query_ready.set()
+
     def AsyncCandidateRequestReady(self):
-        return self.candidates is not None
+        return WaitAndClear(self._candidates_ready, 0)
 
     def CandidatesFromStoredRequest(self):
-        return self.candidates
+        return self._candidates or []
 
-    def CandidatesForQueryAsync( self, query ):
-        buffer = vim.current.buffer
-        filename = buffer.name
-        line, column = CurrentLineAndColumn()
-        script = Script("\n".join(buffer), line + 1, column, filename)
-        self.candidates = [completion.word for completion
-                           in script.complete() if completion.word.startswith(query)]
+    def SetCandidates(self):
+        while True:
+            WaitAndClear(self._query_ready)
+
+            if self._exit:
+                return
+
+            source = "\n".join(vim.current.buffer)
+            line, column = CurrentLineAndColumn()
+            filename = vim.current.buffer.name
+
+            script = Script(source, line + 1, column, filename)
+
+            self._candidates = []
+            for completion in script.complete():
+                # TODO - use same fuzzy match as clang completer
+                if completion.word.find(self._query) < 0:
+                    continue
+                data = {
+                    'word': completion.word,
+                    'menu': completion.description,
+                    'info': completion.doc,
+                }
+                self._candidates.append(data)
+
+            self._candidates_ready.set()
+
+    def OnInsertLeave(self):
+        """ Tell the worker thread to exit """
+        self._exit = True
+        self._query_ready.set()
+        self._candidates = None
+
+
+def WaitAndClear(event, timeout=None):
+    ret = event.wait(timeout)
+    if ret:
+        event.clear()
+    return ret
