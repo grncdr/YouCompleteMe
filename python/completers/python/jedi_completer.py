@@ -51,16 +51,12 @@ class JediCompleter(Completer):
         """ Just python """
         return ['python']
 
-    def ShouldUseNow(self, start_column):
+    def ShouldUseNowInner(self, start_column):
         """
         Use Jedi if we are completing an identifier immediately after a dot.
         """
         line = vim.current.line
-        before, dot, after = line.rpartition('.')
-        if dot and len(before) < start_column and re.search('^\\w*$', after):
-            return True
-
-        return False
+        return line[start_column - 1] == '.'
 
     def OnFileReadyToParse(self):
         pass
