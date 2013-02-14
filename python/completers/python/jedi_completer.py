@@ -39,6 +39,7 @@ class JediCompleter(Completer):
     """
 
     def __init__(self):
+        super(JediCompleter, self).__init__()
         self._query_ready = Event()
         self._candidates_ready = Event()
         self._query = None
@@ -58,17 +59,14 @@ class JediCompleter(Completer):
         line = vim.current.line
         return line[start_column - 1] == '.'
 
-    def OnFileReadyToParse(self):
-        pass
-
     def CandidatesForQueryAsync(self, query):
         self._query = query
         self._query_ready.set()
 
-    def AsyncCandidateRequestReady(self):
+    def AsyncCandidateRequestReadyInner(self):
         return WaitAndClear(self._candidates_ready, 0)
 
-    def CandidatesFromStoredRequest(self):
+    def CandidatesFromStoredRequestInner(self):
         return self._candidates or []
 
     def SetCandidates(self):
