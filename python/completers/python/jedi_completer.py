@@ -18,10 +18,9 @@
 import vim
 from threading import Thread, Event
 from completers.completer import Completer
-from vimsupport import CurrentLineAndColumn
+from vimsupport import CurrentLineAndColumn, PostVimMessage
 
 import sys
-import re
 from os.path import join, abspath, dirname
 
 # We need to add the jedi package to sys.path, but it's important that we clean
@@ -57,6 +56,7 @@ class JediCompleter(Completer):
         Use Jedi if we are completing an identifier immediately after a dot.
         """
         line = vim.current.line
+        PostVimMessage("Should? " + vim.current.line + ":" + str(start_column))
         return line[start_column - 1] == '.'
 
     def CandidatesForQueryAsync(self, query):
@@ -64,7 +64,7 @@ class JediCompleter(Completer):
         self._query_ready.set()
 
     def AsyncCandidateRequestReadyInner(self):
-        return WaitAndClear(self._candidates_ready, 0)
+        return WaitAndClear(self._candidates_ready, timeout=0)
 
     def CandidatesFromStoredRequestInner(self):
         return self._candidates or []
@@ -76,23 +76,25 @@ class JediCompleter(Completer):
             if self._exit:
                 return
 
-            source = "\n".join(vim.current.buffer)
-            line, column = CurrentLineAndColumn()
             filename = vim.current.buffer.name
+            query = self._query
+            line, column = CurrentLineAndColumn()
+            lines = map(str, vim.current.buffer)
+            if query:
+                column -= len(query) - 1
+                lines[line] = lines[line][:column]
 
+            source = "\n".join(lines)
+
+            PostVimMessage("Complete %s:%d (%s)" % (lines[line],
+                                                    column,
+                                                    query))
             script = Script(source, line + 1, column, filename)
 
-            self._candidates = []
-            for completion in script.complete():
-                # TODO - use same fuzzy match as clang completer
-                if completion.word.find(self._query) < 0:
-                    continue
-                data = {
-                    'word': completion.word,
-                    'menu': completion.description,
-                    'info': completion.doc,
-                }
-                self._candidates.append(data)
+            self._candidates = [{'word': completion.word,
+                                 'menu': completion.description,
+                                 'info': completion.doc}
+                                for completion in script.complete()]
 
             self._candidates_ready.set()
 
