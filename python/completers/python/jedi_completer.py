@@ -18,7 +18,7 @@
 import vim
 from threading import Thread, Event
 from completers.completer import Completer
-from vimsupport import CurrentLineAndColumn, PostVimMessage
+from vimsupport import CurrentLineAndColumn
 
 import sys
 from os.path import join, abspath, dirname
@@ -44,6 +44,9 @@ class JediCompleter(Completer):
         self._query = None
         self._candidates = None
         self._exit = False
+        self._start_completion_thread()
+
+    def _start_completion_thread(self):
         self._completion_thread = Thread(target=self.SetCandidates)
         self._completion_thread.start()
 
@@ -55,16 +58,21 @@ class JediCompleter(Completer):
         """
         Use Jedi if we are completing an identifier immediately after a dot.
         """
-        line = vim.current.line
-        PostVimMessage("Should? " + vim.current.line + ":" + str(start_column))
-        return line[start_column - 1] == '.'
+        line = str(vim.current.line)
+        result = line[start_column - 1] == '.'
+        return result
 
-    def CandidatesForQueryAsync(self, query):
+    def CandidatesForQueryAsyncInner(self, query):
         self._query = query
+        self._candidates_ready.clear()
         self._query_ready.set()
 
     def AsyncCandidateRequestReadyInner(self):
-        return WaitAndClear(self._candidates_ready, timeout=0)
+        if self._completion_thread.is_alive():
+            return WaitAndClear(self._candidates_ready, timeout=0.005)
+        else:
+            self._start_completion_thread()
+            return True
 
     def CandidatesFromStoredRequestInner(self):
         return self._candidates or []
@@ -80,20 +88,18 @@ class JediCompleter(Completer):
             query = self._query
             line, column = CurrentLineAndColumn()
             lines = map(str, vim.current.buffer)
-            if query:
-                column -= len(query) - 1
-                lines[line] = lines[line][:column]
+            if query is not None and lines[line]:
+                before, after = lines[line].rsplit('.', 1)
+                lines[line] = before + '.'
+                column = len(before) + 1
 
             source = "\n".join(lines)
 
-            PostVimMessage("Complete %s:%d (%s)" % (lines[line],
-                                                    column,
-                                                    query))
             script = Script(source, line + 1, column, filename)
 
-            self._candidates = [{'word': completion.word,
-                                 'menu': completion.description,
-                                 'info': completion.doc}
+            self._candidates = [{'word': str(completion.word),
+                                 'menu': str(completion.description),
+                                 'info': str(completion.doc)}
                                 for completion in script.complete()]
 
             self._candidates_ready.set()
